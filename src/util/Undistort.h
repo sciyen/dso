@@ -155,4 +155,13 @@ namespace dso
 		void distortCoordinates(float *in_x, float *in_y, float *out_x, float *out_y, int n) const;
 	};
 
+	class UndistortRationalModel : public Undistort
+	{
+	public:
+		EIGEN_MAKE_ALIGNED_OPERATOR_NEW;
+		UndistortRationalModel(const char *configFileName, bool noprefix);
+		~UndistortRationalModel();
+		void distortCoordinates(float *in_x, float *in_y, float *out_x, float *out_y, int n) const;
+	};
+
 }

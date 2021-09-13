@@ -270,14 +270,28 @@ namespace dso
 		std::getline(f, l1);
 		f.close();
 
-		float ic[10];
+		float ic[12];
 
 		Undistort *u;
 
+		// for backwards-compatibility: Use Rational model for 11 parameters.
+		if (std::sscanf(l1.c_str(), "%f %f %f %f %f %f %f %f %f %f %f %f",
+						&ic[0], &ic[1], &ic[2], &ic[3], &ic[4],
+						&ic[5], &ic[6], &ic[7], &ic[8], &ic[9], &ic[10], &ic[11]) == 12)
+		{
+			printf("found Rational camera model, building rectifier.\n");
+			u = new UndistortRationalModel(configFilename.c_str(), true);
+			if (!u->isValid())
+			{
+				delete u;
+				return 0;
+			}
+		}
+
 		// for backwards-compatibility: Use RadTan model for 8 parameters.
-		if (std::sscanf(l1.c_str(), "%f %f %f %f %f %f %f %f",
-						&ic[0], &ic[1], &ic[2], &ic[3],
-						&ic[4], &ic[5], &ic[6], &ic[7]) == 8)
+		else if (std::sscanf(l1.c_str(), "%f %f %f %f %f %f %f %f",
+							 &ic[0], &ic[1], &ic[2], &ic[3],
+							 &ic[4], &ic[5], &ic[6], &ic[7]) == 8)
 		{
 			printf("found RadTan (OpenCV) camera model, building rectifier.\n");
 			u = new UndistortRadTan(configFilename.c_str(), true);
@@ -315,6 +329,18 @@ namespace dso
 		}
 
 		// clean model selection implementation.
+		else if (std::sscanf(l1.c_str(), "RationalModel %f %f %f %f %f %f %f %f %f %f %f %f",
+							 &ic[0], &ic[1], &ic[2], &ic[3], &ic[4],
+							 &ic[5], &ic[6], &ic[7], &ic[8], &ic[9], &ic[10], &ic[11]) == 12)
+		{
+			u = new UndistortRationalModel(configFilename.c_str(), false);
+			if (!u->isValid())
+			{
+				delete u;
+				return 0;
+			}
+		}
+
 		else if (std::sscanf(l1.c_str(), "KannalaBrandt %f %f %f %f %f %f %f %f",
 							 &ic[0], &ic[1], &ic[2], &ic[3],
 							 &ic[4], &ic[5], &ic[6], &ic[7]) == 8)
@@ -788,6 +814,28 @@ namespace dso
 				return;
 			}
 		}
+		else if (nPars == 12) // rational model
+		{
+			char buf[1000];
+			snprintf(buf, 1000, "%s%%lf %%lf %%lf %%lf %%lf %%lf %%lf %%lf %%lf %%lf %%lf %%lf", prefix.c_str());
+
+			if (std::sscanf(l1.c_str(), buf,
+							&parsOrg[0], &parsOrg[1], &parsOrg[2], &parsOrg[3], &parsOrg[4],
+							&parsOrg[5], &parsOrg[6], &parsOrg[7], &parsOrg[8], &parsOrg[9], &parsOrg[10], &parsOrg[11]) == 12 &&
+				std::sscanf(l2.c_str(), "%d %d", &wOrg, &hOrg) == 2)
+			{
+				printf("Input resolution: %d %d\n", wOrg, hOrg);
+				printf("In: %s%f %f %f %f %f %f %f %f %f %f %f %f\n",
+					   prefix.c_str(),
+					   parsOrg[0], parsOrg[1], parsOrg[2], parsOrg[3], parsOrg[4], parsOrg[5], parsOrg[6], parsOrg[7], parsOrg[8], parsOrg[9], parsOrg[10], parsOrg[11]);
+			}
+			else
+			{
+				printf("Failed to read camera calibration (invalid format?)\nCalibration file: %s\n", configFileName);
+				infile.close();
+				return;
+			}
+		}
 		else
 		{
 			printf("called with invalid number of parameters.... forgot to implement me?\n");
@@ -1201,6 +1249,63 @@ namespace dso
 			iy = fy * iy + cy;
 			out_x[i] = ix;
 			out_y[i] = iy;
+		}
+	}
+
+	UndistortRationalModel::UndistortRationalModel(const char *configFileName, bool noprefix)
+	{
+		printf("Creating Rational Model undistorter\n");
+
+		if (noprefix)
+			readFromFile(configFileName, 12);
+		else
+			readFromFile(configFileName, 12, "RationalModel ");
+	}
+	UndistortRationalModel::~UndistortRationalModel()
+	{
+	}
+
+	void UndistortRationalModel::distortCoordinates(float *in_x, float *in_y, float *out_x, float *out_y, int n) const
+	{
+		// The undistort model referred from openCV document
+		// https://docs.opencv.org/master/d9/d0c/group__calib3d.html#ga7dfb72c9cf9780a347fbe3d1c47e5d5a
+		float fx = parsOrg[0];
+		float fy = parsOrg[1];
+		float cx = parsOrg[2];
+		float cy = parsOrg[3];
+		float k1 = parsOrg[4];
+		float k2 = parsOrg[5];
+		float p1 = parsOrg[6];
+		float p2 = parsOrg[7];
+		float k3 = parsOrg[8];
+		float k4 = parsOrg[9];
+		float k5 = parsOrg[10];
+		float k6 = parsOrg[11];
+
+		float ofx = K(0, 0);
+		float ofy = K(1, 1);
+		float ocx = K(0, 2);
+		float ocy = K(1, 2);
+
+		for (int i = 0; i < n; i++)
+		{
+			float x = in_x[i];
+			float y = in_y[i];
+
+			// EQUI
+			float ix = (x - ocx) / ofx;
+			float iy = (y - ocy) / ofy;
+			float r2 = ix * ix + iy * iy;
+			float r4 = r2 * r2;
+			float r6 = r2 * r4;
+			float r8 = r4 * r4;
+			float rd = (1.0f + k1 * r2 + k2 * r4 + k3 * r6) / (1.0f + k4 * r2 + k5 * r4 + k6 * r6);
+			//float scaling = (r > 1e-8) ? thetad / r : 1.0;
+			float ox = fx * ix * rd + cx;
+			float oy = fy * iy * rd + cy;
+
+			out_x[i] = ox;
+			out_y[i] = oy;
 		}
 	}
 
